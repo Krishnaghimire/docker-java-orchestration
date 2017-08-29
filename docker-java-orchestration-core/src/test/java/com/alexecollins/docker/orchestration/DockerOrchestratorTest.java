@@ -590,7 +590,7 @@ public class DockerOrchestratorTest {
         mockLogContainerCmd("Bar");
 
         try {
-            testObj.start();
+            testObj.startAsync();
             fail();
         } catch (OrchestrationException e) {
             assertThat(e.getMessage(), endsWith(String.format("%s's log ended before [\"^Foo$\"] appeared in output", idMock)));
@@ -621,7 +621,7 @@ public class DockerOrchestratorTest {
         mockLogContainerCmd("Bar");
 
         try {
-            testObj.start();
+            testObj.startAsync();
             fail();
         } catch (OrchestrationException e) {
             assertThat(e.getMessage(), endsWith(String.format("timeout after 0 while waiting for \"%s\" in %s's logs", firstLogPattern.getPattern(), idMock)));

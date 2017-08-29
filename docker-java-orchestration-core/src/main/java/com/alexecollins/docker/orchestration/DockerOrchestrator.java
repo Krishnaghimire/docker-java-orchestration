@@ -36,7 +36,7 @@ import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.zip.GZIPOutputStream;
 
 import static java.util.Arrays.asList;
@@ -71,6 +71,7 @@ public class DockerOrchestrator {
     private final DefinitionFilter definitionFilter;
     private final boolean permissionErrorTolerant;
 
+    private Set<String> startedContainer = new HashSet<>();
     /**
      * @deprecated Please use builder from now on.
      */
@@ -434,13 +435,7 @@ public class DockerOrchestrator {
         return buildFlags.contains(flag);
     }
 
-    private void start(final Id id) {
-        if (id == null) {
-            throw new IllegalArgumentException("id is null");
-        }
-
-        logger.info("Starting " + id);
-
+    private void build(final Id id, CountDownLatch countDownLatch){
         try {
             if (!imageExists(id)) {
                 logger.info("Image does not exist, so building it");
@@ -448,6 +443,28 @@ public class DockerOrchestrator {
             }
         } catch (DockerException e) {
             throw new OrchestrationException(e);
+        }finally {
+            countDownLatch.countDown();
+        }
+
+    }
+
+    private void start(final Id id, CountDownLatch countDownLatch) {
+        if (id == null) {
+            countDownLatch.countDown();
+            startedContainer.add(id.toString());
+            throw new IllegalArgumentException("id is null");
+        }
+
+        logger.info("Starting " + id);
+
+        while (!isAllContainerStarted(id)) {
+            logger.info("Sleeping for 1 second for dependent container to start");
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
 
         try {
@@ -475,15 +492,15 @@ public class DockerOrchestrator {
             for (Plugin plugin : plugins) {
                 plugin.started(id, conf);
             }
-
             sleep(id);
-
             healthCheck(id);
 
         } catch (Exception e) {
             logger.error("Error starting container with id " + id + ": " + e.getMessage());
             throw new OrchestrationException(e);
         } finally {
+            startedContainer.add(id.toString());
+            countDownLatch.countDown();
             final Container container = findContainer(id);
             if (container == null) {
                 logger.error("Could not find container with id {}. No logs can be obtained", id);
@@ -872,13 +889,67 @@ public class DockerOrchestrator {
             throw new OrchestrationException(innerException);
     }
 
-    public void start() {
+    /*
+        To start without new thread creation
+     */
+    public void startAsync() {
         for (Id id : ids()) {
             if (!inclusive(id)) {
                 continue;
             }
-            start(id);
+            build(id, new CountDownLatch(1));
+            start(id, new CountDownLatch(1));
         }
+    }
+
+    public void start() {
+        this.start(1);
+    }
+
+    public void start(int threadCount) {
+        ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch countDownLatch = new CountDownLatch(ids().size());
+        for (Id id : ids()) {
+            if (!inclusive(id)) {
+                countDownLatch.countDown();
+                continue;
+            }
+            Runnable task = ()-> build(id, countDownLatch);
+            executorService.submit(task);
+        }
+        try {
+            countDownLatch.await();
+        } catch (InterruptedException e) {
+            logger.error("InterruptedException occurred", e);
+        }
+
+        CountDownLatch countDownLatch1 = new CountDownLatch(ids().size());
+
+        for (Id id : ids()) {
+            if (!inclusive(id)) {
+                countDownLatch1.countDown();
+                continue;
+            }
+            Runnable task = ()-> start(id, countDownLatch1);
+            executorService.submit(task);
+        }
+
+        try {
+            countDownLatch1.await();
+        } catch (InterruptedException e) {
+            logger.error("InterruptedException occurred", e);
+        }
+    }
+
+    private boolean isAllContainerStarted(Id id) {
+        Conf conf = conf(id);
+        List<Depend> depends = conf.getDepends();
+        for (Depend depend : depends) {
+            if (!startedContainer.contains(depend.getId().toString())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public void copy(String resource, String hostpath) {

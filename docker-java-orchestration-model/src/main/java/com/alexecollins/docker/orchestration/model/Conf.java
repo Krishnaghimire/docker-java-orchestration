@@ -18,6 +18,7 @@ public class Conf {
      */
     private ContainerConf container = new ContainerConf();
     private List<Link> links = new ArrayList<>();
+    private List<Depend> depends = new ArrayList<>();
     private Packaging packaging = new Packaging();
     /**
      * E.g. "8080" or "8080 8080" where the former is the exposed port and the latter the container port.
